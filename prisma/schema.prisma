@@ -1,0 +1,544 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  termsAcceptedAt    DateTime?
+  id                 String              @id @default(cuid())
+  name               String?
+  email              String              @unique
+  passwordHash       String
+  plan               String              @default("free")
+  // 🩹 2026-09-01: apps com múltiplos papéis (jogador/dono, recepção/vet/admin…)
+  // faziam `prisma.user.findMany({ where: { role } })` e o build quebrava
+  // (TS2353: 'role' não existe em UserWhereInput). Agora a fundação tem o campo.
+  role               String              @default("user")
+  stripeCustomerId   String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  projects           Project[]
+  clientUsers        ClientUser[]
+  driver             Driver?
+  collectionRequests CollectionRequest[] @relation("CollectionApprovedBy")
+  oTEvents           OTEvent[]           @relation("OTEventRegisteredBy")
+  manifests          Manifest[]          @relation("ManifestCreatedBy")
+  occurrences        Occurrence[]        @relation("OccurrenceRegisteredBy")
+  invoices           Invoice[]           @relation("InvoiceCreatedBy")
+  auditLogs          AuditLog[]
+  notifications      Notification[]
+  driverId           String?
+}
+
+model Project {
+  id        String   @id @default(cuid())
+  name      String
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([ownerId])
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  permissions Json
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  clientUsers ClientUser[]
+}
+
+model Client {
+  id             String    @id @default(cuid())
+  name           String
+  tradeName      String?
+  document       String    @unique
+  email          String?
+  phone          String?
+  address        String?
+  city           String?
+  state          String?
+  zipCode        String?
+  score          Float     @default(0)
+  scoreUpdatedAt DateTime?
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  clientUsers        ClientUser[]
+  freightTables      FreightTable[]
+  collectionRequests CollectionRequest[]
+  transportOrders    TransportOrder[]
+  invoices           Invoice[]
+  accountsPayable    AccountPayable[]
+}
+
+model ClientUser {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id])
+  roleId    String?
+  role      Role?    @relation(fields: [roleId], references: [id])
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, clientId])
+  @@index([userId])
+  @@index([clientId])
+  @@index([roleId])
+}
+
+model FreightTable {
+  id           String    @id @default(cuid())
+  clientId     String
+  client       Client    @relation(fields: [clientId], references: [id])
+  name         String
+  validFrom    DateTime
+  validTo      DateTime?
+  cubageFactor Float     @default(300)
+  grisPercent  Float     @default(0)
+  tdeValue     Float     @default(0)
+  tollValue    Float     @default(0)
+  minValue     Float     @default(0)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  rates FreightRate[]
+
+  @@index([clientId])
+}
+
+model FreightRate {
+  id             String       @id @default(cuid())
+  freightTableId String
+  freightTable   FreightTable @relation(fields: [freightTableId], references: [id])
+  routeId        String
+  route          Route        @relation(fields: [routeId], references: [id])
+  weightFrom     Float
+  weightTo       Float
+  fixedValue     Float?
+  pricePerKg     Float?
+  minValue       Float?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([freightTableId, routeId])
+  @@index([freightTableId])
+  @@index([routeId])
+}
+
+model Route {
+  id               String   @id @default(cuid())
+  originCity       String
+  originState      String
+  originZip        String?
+  destinationCity  String
+  destinationState String
+  destinationZip   String?
+  distanceKm       Float?
+  estimatedHours   Float?
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  freightRates      FreightRate[]
+  transportOrders   TransportOrder[]
+  driverCommissions DriverCommission[]
+}
+
+model Vehicle {
+  id                String   @id @default(cuid())
+  plate             String   @unique
+  model             String
+  brand             String?
+  year              Int?
+  type              String
+  capacityKg        Float
+  capacityM3        Float
+  status            String   @default("disponivel")
+  currentOdometerKm Float    @default(0)
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  drivers      Driver[]
+  maintenances Maintenance[]
+  fuelings     Fueling[]
+  manifests    Manifest[]
+}
+
+model Driver {
+  id                 String   @id @default(cuid())
+  userId             String?  @unique
+  user               User?    @relation(fields: [userId], references: [id])
+  name               String
+  document           String   @unique
+  cnhNumber          String
+  cnhCategory        String
+  cnhExpiresAt       DateTime
+  phone              String?
+  email              String?
+  type               String   @default("proprio")
+  salary             Float?
+  commissionPercent  Float?
+  commissionPerRoute Float?
+  vehicleId          String?
+  vehicle            Vehicle? @relation(fields: [vehicleId], references: [id])
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  manifests         Manifest[]
+  driverCommissions DriverCommission[]
+  accountsPayable   AccountPayable[]
+
+  @@index([vehicleId])
+}
+
+model Maintenance {
+  id            String    @id @default(cuid())
+  vehicleId     String
+  vehicle       Vehicle   @relation(fields: [vehicleId], references: [id])
+  type          String
+  description   String?
+  cost          Float
+  odometerKm    Float?
+  performedAt   DateTime
+  nextDueAt     DateTime?
+  provider      String?
+  invoiceNumber String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([vehicleId])
+}
+
+model Fueling {
+  id            String   @id @default(cuid())
+  vehicleId     String
+  vehicle       Vehicle  @relation(fields: [vehicleId], references: [id])
+  driverId      String?
+  liters        Float
+  pricePerLiter Float
+  totalValue    Float
+  odometerKm    Float?
+  station       String?
+  fueledAt      DateTime
+  receiptUrl    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([vehicleId])
+}
+
+model CollectionRequest {
+  id                 String          @id @default(cuid())
+  clientId           String
+  client             Client          @relation(fields: [clientId], references: [id])
+  originAddress      String
+  originCity         String
+  originState        String
+  originZip          String?
+  destinationAddress String
+  destinationCity    String
+  destinationState   String
+  destinationZip     String?
+  cargoDescription   String
+  weightKg           Float
+  volumeM3           Float?
+  packages           Int?
+  requestedAt        DateTime        @default(now())
+  scheduledFor       DateTime?
+  status             String          @default("pendente")
+  approvedById       String?
+  approvedBy         User?           @relation("CollectionApprovedBy", fields: [approvedById], references: [id])
+  approvedAt         DateTime?
+  rejectionReason    String?
+  transportOrderId   String?         @unique
+  transportOrder     TransportOrder? @relation(fields: [transportOrderId], references: [id])
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([clientId])
+  @@index([approvedById])
+}
+
+model TransportOrder {
+  id                  String             @id @default(cuid())
+  code                String             @unique
+  clientId            String
+  client              Client             @relation(fields: [clientId], references: [id])
+  routeId             String
+  route               Route              @relation(fields: [routeId], references: [id])
+  freightTableId      String?
+  originAddress       String
+  originCity          String
+  originState         String
+  originZip           String?
+  destinationAddress  String
+  destinationCity     String
+  destinationState    String
+  destinationZip      String?
+  cargoDescription    String
+  weightKg            Float
+  volumeM3            Float
+  cubageWeightKg      Float              @default(0)
+  taxableWeightKg     Float              @default(0)
+  packages            Int?
+  freightBaseValue    Float              @default(0)
+  grisValue           Float              @default(0)
+  tdeValue            Float              @default(0)
+  tollValue           Float              @default(0)
+  freightTotalValue   Float              @default(0)
+  status              String             @default("emitida")
+  scheduledPickupAt   DateTime?
+  scheduledDeliveryAt DateTime?
+  deliveredAt         DateTime?
+  manifestId          String?
+  manifest            Manifest?          @relation(fields: [manifestId], references: [id])
+  collectionRequest   CollectionRequest?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  events              OTEvent[]
+  occurrences         Occurrence[]
+  deliveryReceipt     DeliveryReceipt?
+  invoiceItems        InvoiceItem[]
+  driverCommissions   DriverCommission[]
+  collectionRequestId String?
+  deliveryReceiptId   String?
+
+  @@index([clientId])
+  @@index([routeId])
+  @@index([manifestId])
+}
+
+model OTEvent {
+  id               String         @id @default(cuid())
+  transportOrderId String
+  transportOrder   TransportOrder @relation(fields: [transportOrderId], references: [id])
+  type             String
+  description      String?
+  latitude         Float?
+  longitude        Float?
+  registeredById   String?
+  registeredBy     User?          @relation("OTEventRegisteredBy", fields: [registeredById], references: [id])
+  occurredAt       DateTime       @default(now())
+  metadata         Json?
+  createdAt        DateTime       @default(now())
+
+  @@index([transportOrderId, occurredAt])
+  @@index([transportOrderId])
+  @@index([registeredById])
+}
+
+model Manifest {
+  id                  String    @id @default(cuid())
+  code                String    @unique
+  vehicleId           String
+  vehicle             Vehicle   @relation(fields: [vehicleId], references: [id])
+  driverId            String
+  driver              Driver    @relation(fields: [driverId], references: [id])
+  status              String    @default("aberto")
+  totalWeightKg       Float     @default(0)
+  totalCubageWeightKg Float     @default(0)
+  totalVolumeM3       Float     @default(0)
+  capacityKg          Float
+  capacityM3          Float
+  departureAt         DateTime?
+  arrivalAt           DateTime?
+  createdById         String?
+  createdBy           User?     @relation("ManifestCreatedBy", fields: [createdById], references: [id])
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  items           ManifestItem[]
+  transportOrders TransportOrder[]
+
+  @@index([vehicleId])
+  @@index([driverId])
+  @@index([createdById])
+}
+
+model ManifestItem {
+  id               String   @id @default(cuid())
+  manifestId       String
+  manifest         Manifest @relation(fields: [manifestId], references: [id])
+  transportOrderId String
+  weightKg         Float
+  cubageWeightKg   Float    @default(0)
+  volumeM3         Float    @default(0)
+  sequence         Int?
+  createdAt        DateTime @default(now())
+
+  @@unique([manifestId, transportOrderId])
+  @@index([manifestId])
+}
+
+model Occurrence {
+  id               String         @id @default(cuid())
+  transportOrderId String
+  transportOrder   TransportOrder @relation(fields: [transportOrderId], references: [id])
+  type             String
+  description      String
+  photoUrl         String?
+  latitude         Float?
+  longitude        Float?
+  status           String         @default("aberta")
+  rescheduledFor   DateTime?
+  resolvedAt       DateTime?
+  registeredById   String?
+  registeredBy     User?          @relation("OccurrenceRegisteredBy", fields: [registeredById], references: [id])
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([transportOrderId])
+  @@index([registeredById])
+}
+
+model DeliveryReceipt {
+  id               String         @id @default(cuid())
+  transportOrderId String         @unique
+  transportOrder   TransportOrder @relation(fields: [transportOrderId], references: [id])
+  receiverName     String
+  receiverDocument String?
+  signatureUrl     String
+  photoUrl         String?
+  latitude         Float?
+  longitude        Float?
+  deliveredAt      DateTime       @default(now())
+  notes            String?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+}
+
+model Invoice {
+  id          String   @id @default(cuid())
+  number      String   @unique
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id])
+  periodStart DateTime
+  periodEnd   DateTime
+  issueDate   DateTime @default(now())
+  dueDate     DateTime
+  subtotal    Float    @default(0)
+  taxes       Float    @default(0)
+  total       Float    @default(0)
+  status      String   @default("emitida")
+  pdfUrl      String?
+  danfeUrl    String?
+  cteNumber   String?
+  cteKey      String?
+  createdById String?
+  createdBy   User?    @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items InvoiceItem[]
+
+  @@index([clientId])
+  @@index([createdById])
+}
+
+model InvoiceItem {
+  id               String         @id @default(cuid())
+  invoiceId        String
+  invoice          Invoice        @relation(fields: [invoiceId], references: [id])
+  transportOrderId String
+  transportOrder   TransportOrder @relation(fields: [transportOrderId], references: [id])
+  description      String
+  value            Float
+  createdAt        DateTime       @default(now())
+
+  @@index([invoiceId])
+  @@index([transportOrderId])
+}
+
+model AccountPayable {
+  id          String    @id @default(cuid())
+  description String
+  clientId    String?
+  client      Client?   @relation(fields: [clientId], references: [id])
+  driverId    String?
+  driver      Driver?   @relation(fields: [driverId], references: [id])
+  category    String
+  amount      Float
+  dueDate     DateTime
+  paidAt      DateTime?
+  status      String    @default("pendente")
+  documentUrl String?
+  notes       String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([clientId])
+  @@index([driverId])
+}
+
+model DriverCommission {
+  id               String          @id @default(cuid())
+  driverId         String
+  driver           Driver          @relation(fields: [driverId], references: [id])
+  transportOrderId String?
+  transportOrder   TransportOrder? @relation(fields: [transportOrderId], references: [id])
+  routeId          String?
+  route            Route?          @relation(fields: [routeId], references: [id])
+  type             String
+  baseValue        Float
+  percent          Float?
+  amount           Float
+  referenceDate    DateTime
+  paidAt           DateTime?
+  status           String          @default("pendente")
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([driverId])
+  @@index([transportOrderId])
+  @@index([routeId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  action    String
+  entity    String
+  entityId  String?
+  before    Json?
+  after     Json?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([userId, createdAt])
+  @@index([userId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  title     String
+  message   String
+  type      String    @default("info")
+  channel   String    @default("inapp")
+  readAt    DateTime?
+  metadata  Json?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId])
+}
